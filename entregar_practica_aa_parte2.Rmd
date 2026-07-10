@@ -1,0 +1,1559 @@
+---
+title: "Práctica Aprendizaje Automático"
+author: "Alonso Rescalvo Casas, Gabriel Carlos Suárez Chiquito y Marc Gil Arnau. Grupo 2"
+date: "2025-02-16"
+output:
+   html_document:
+    toc: true        # Activa el índice (table of contents)
+    toc_float: true  # Hace que el índice sea flotante en HTML
+    number_sections: true # Numera los títulos
+    theme: cerulean  # Tema visual
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+# Comprensión del problema. Explicación. Lectura de datos. Particiones.
+
+El conjunto de datos sirve para intentar predecir cómo de probable es sufrir un derrame cerebral a partir de unos parámetros.
+Los datos han sido extraídos del [repositorio Kaggle predicción derrame cerebral](https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset).
+Según la OMS, los derrames cerebrales son la segunda causa de mortalidad, responsables de aproximadamente el 11% de las muertes en el mundo.
+
+Este conjunto de datos permite predecir si es probable que un paciente sufra un accidente cerebrovascular en función de parámetros como el sexo, la edad, diversas enfermedades y el tabaquismo.
+Cada fila de los datos proporciona información relevante sobre el paciente.
+
+## Variables del dataset:
+
+1)  id: Identificador único
+2)  gender: "Masculino", "Femenino", "Otros"
+3)  age: Edad del paciente en años
+4)  hypertension: 0 si no tiene hipertensión, 1 si tiene hipertensión
+5)  heart_disease: 0 si no tiene enfermedades cardíacas, 1 si tiene
+6)  ever_married: "No" o "Yes"
+7)  work_type: "children", "Govt_job", "Never_worked", "Private", "Self-employed"
+8)  Residence_type: "Rural" o "Urban"
+9)  avg_glucose_level: Media de glucosa en sangre
+10) bmi: Índice de masa corporal (IMC)
+11) smoking_status: "formerly smoked", "never smoked", "smokes", "Unknown"
+12) stroke: 1 si ha sufrido un derrame, 0 si no
+
+## Carga y exploración inicial de los datos
+
+```{r}
+library(readr)
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(readr)
+library(adabag)
+library(cluster)
+library(factoextra)
+library(pROC)
+library(yardstick)
+library(naivebayes)
+library(randomForest)
+library(ROSE)
+library(rpart.plot)
+
+datos <- read.csv("healthcare-dataset-stroke-data.csv", sep=",", header=TRUE)
+
+summary(datos)
+head(datos)
+```
+
+```{r}
+str(datos)
+```
+
+Podemos ver como hemos importado el bmi como 'character' y esto no tiene sentido ya que debería de tratarse de una variable continua.
+
+```{r}
+table(datos$bmi)
+```
+
+Hay 201 valores faltantes pero están como "N/A" y no como NA, por eso trata la variable como "character".
+
+Vamos a convertir los valores "N/A" a NA y transformar BMI a una variable númerica.
+
+```{r}
+datos$bmi[datos$bmi == "N/A"] <- NA
+datos$bmi <- as.numeric(datos$bmi)
+summary(datos$bmi)
+```
+
+
+## Partición en train-test-validation
+
+```{r}
+set.seed(10)
+
+ntotal <- dim(datos)[1]
+indices <- 1:ntotal
+ntrain <- ntotal * 0.6
+indices_train <- sample(indices, ntrain, replace = FALSE)
+
+indices_restantes <- indices[-indices_train]
+ntest <- length(indices_restantes) * 0.5
+indices_test <- sample(indices_restantes, ntest, replace = FALSE)
+indices_val <- indices[-c(indices_train, indices_test)]
+
+train <- datos[indices_train,]
+test <- datos[indices_test,]
+val <- datos[indices_val,]
+
+# Comprobamos la partición
+dim(train)
+dim(test)
+dim(val)
+```
+
+
+# Preparación de datos y análisis exploratorio de datos.
+
+Ver dimensiones de train
+
+```{r}
+dim(train)
+
+```
+
+La partición de los datos "train" tiene el 60% de las observaciones totales, es decir 3066 observaciones, y 12 variables.
+
+```{r}
+str(train)
+head(train)
+```
+Vemos el tipo de datos que tenemos en train
+
+```{r}
+str(train)
+```
+
+Variables discretas: id, hypertension, heart_disease y stroke.
+
+Variables continuas: age, avg_glucose_level y bmi.
+
+Variables texto: gender, ever_married, work_type, Residence_type y smoking_status.
+
+Se observa que hay tres variables continuas que son age, avg_glucose_level y bmi que estan en tipo num lo cual es correcto.
+
+
+La columna id no será relevante para el modelo de machine learning, ya que el identificador único de una persona no tiene influencia en el diagnóstico médico. Por lo tanto, eliminaremos esta columna del conjunto de datos para evitar que afecte la construcción del modelo.
+
+```{r}
+train <- train[, -which(names(train) == "id")]
+```
+
+Las variables de texto (gender, ever_married, work_type, Residence_type y smoking_status) están actualmente en formato "character". Dado que estas variables son categóricas, las convertiremos a tipo factor para facilitar su procesamiento en el modelo.
+
+```{r}
+train$gender <- factor(train$gender)
+train$ever_married <- factor(train$ever_married)
+train$Residence_type <- factor(train$Residence_type)
+train$smoking_status <- factor(train$smoking_status)
+train$work_type <- factor(train$work_type)
+train$hypertension <- factor(train$hypertension)
+train$heart_disease <- factor(train$heart_disease)
+train$stroke <- factor(train$stroke)
+
+str(train)
+```
+
+Se puede observar que ya esta corregido lo que se observo anteriormente y que ya están en factor.
+
+## Gráficos de distribucion de las variables
+
+Ahora vamos a ver gráficos de la distribución y frecuencia de las algunas de las variables.
+
+Grafico en función del tipo de trabajo
+
+```{r}
+ggplot(train) + geom_bar(aes(x = work_type), fill = "skyblue", color = "black") + theme_minimal() + labs(title = "Distribución de Tipos de Trabajo", x = "Tipo de Trabajo", y = "Frecuencia")
+```
+
+El primer gráfico muestra el numero de personas segun su sector de trabajo(cildren, govt_job, nerver_worked, Private, Self-eemployed) Se puede observar que la gran mayoria de poblacion trabaja en el sector privado y que ua minoria no trabaja. No se observa ninguna anomalia
+
+```{r}
+ggplot(train, aes(x = age)) + geom_histogram(binwidth = 5, fill = "blue", color = "black", alpha = 0.7) + theme_minimal() + labs(title = "Distribución de la Edad", x = "Edad", y = "Frecuencia")
+```
+
+El histograma muestra la distribución de edades en la población estudiada.
+
+Se puede observar que la frecuencia aumenta a medida que avanza en el rango de edad hasta alrededor de los 55-60 años, donde la barra es más alta.
+A partir de ahí, la frecuencia parece disminuir ligeramente, excepto por una barra muy alta al final.
+
+Esto indica que hay una mayor concentración de individuos en el rango de edad medio-alto (55-60 años), y también hay un grupo considerable de personas de edad avanzada (alrededor de los 80 años).
+
+```{r}
+
+ggplot(train, aes(x = gender)) + geom_bar(fill = "lightblue", color = "black") + theme_minimal() + labs(title = "Distribución del Género", x = "Género", y = "Frecuencia")
+```
+
+El histograma muestra la distribución del género de la muestra estudiada.
+
+Se puede observar que hay más mujeres ("Female") que hombres ("Male") en el conjunto de datos, con una diferencia considerable en las frecuencias.
+
+Por otro lado se muestra una categoría other la cual es una minoria compuesta por un solo miembro.
+
+Decisión sobre la categoría "Other" Dado que la categoría "Other" solo contiene un individuo, mantenerla como una categoría separada podría dificultar el modelado predictivo debido al desequilibrio extremo.
+Para mejorar el modelo, se propone reasignar este individuo a la categoría mayoritaria ("Female" o "Male").
+Esto permitirá reducir el ruido causado por categorías con muy pocos datos.
+
+```{r}
+table(train$gender)
+```
+
+Dado que la categoría 'Other' solo contiene un individuo, mantenerla como una categoría separada podría dificultar el modelado predictivo debido al desequilibrio extremo. Para mejorar el rendimiento del modelo, reasignamos este individuo a la categoría mayoritaria ('Female'). De este modo, se reduce el ruido causado por categorías con un número muy bajo de observaciones, lo que podría beneficiar la precisión del modelo.
+
+```{r}
+# Reasignar la categoría "Other" al género mayoritario ("Female")
+train$gender[train$gender == "Other"] <- "Female"
+# Verificar nuevamente las frecuencias
+table(train$gender)
+```
+
+```{r}
+train$gender[train$gender == "Other"] <- "Female"
+ggplot(train, aes(x = gender)) + geom_bar(fill = "lightblue", color = "black") + theme_minimal() + labs(title = "Distribución del Género", x = "Género", y = "Frecuencia")
+```
+
+```{r}
+ggplot(train, aes(x = smoking_status)) + geom_bar(fill = "lightgreen", color = "black") + theme_minimal() + labs(title = "Distribución del Estado de Tabaquismo", x = "Estado de Tabaquismo", y = "Frecuencia")
+```
+
+Este gráfico muestra la distribución del estado de tabaquismo en los datos. Se observa que una proporción significativa de los registros tiene valores desconocidos. 
+Dado que esta categoría representa una parte considerable de los datos, hemos decidido mantener estos valores tal como están, en lugar de convertirlos en 'NA', ya que podrían contener información relevante que podría influir en el rendimiento del modelo.
+
+
+```{r}
+ggplot(train, aes(x = stroke)) + geom_bar(fill = "lightgreen", color = "black") + theme_minimal() + labs(title = "Distribución de stroke", x = "Stroke", y = "Frecuencia")
+```
+
+Por último, el gráfico muestra la distribución de la variable objetivo, 'stroke'. Se observa que la gran mayoría de las personas no han sufrido un derrame cerebral, mientras que solo una pequeña proporción presenta este diagnóstico. 
+Este desequilibrio en las clases es relevante y debe ser considerado al momento de construir y evaluar el modelo, ya que puede influir en su rendimiento y en la precisión de las predicciones.
+
+## Comparar variable objetivo respecto a las distintas variables
+
+### Stroke vs age
+
+```{r}
+
+# Gráfico de densidad con 'stroke' como factor
+ggplot(train, aes(x = age, color = stroke)) +
+  geom_density(lwd = 2, linetype = 1) +
+  theme_minimal() +
+  labs(title = "Distribución de la Edad según Derrame Cerebral",
+       x = "Edad", y = "Densidad")
+
+```
+
+En estos dos gráficos se puede observar que la edad y la posibilidad de tener un derrame se ve aumentada considerablemente según la edad aumenta.
+
+```{r}
+
+ggplot(datos) +
+  geom_point(aes(x = age, y = stroke), stat = "summary", fun = "mean") +
+  ggtitle("Probabilidad de derrame según Edad") +
+  ylab("Stroke probability")
+
+```
+
+Se observa que a edades tempranas (0-30 años), la probabilidad de sufrir un derrame cerebral es cercana a 0.
+A partir de los 40 años, la probabilidad comienza a aumentar gradualmente.
+A partir de los 60-80 años, hay un incremento notable en la probabilidad de sufrir un derrame.
+Interpretación:
+
+El gráfico sugiere que la edad está positivamente correlacionada con el riesgo de sufrir un derrame cerebral.
+En edades avanzadas (mayores de 60-70 años), la probabilidad se vuelve mucho más alta, lo cual es consistente con lo que se espera en estudios médicos.
+
+A su vez se observa un repunte en un año de la probabilidad de tener un derrame ya que hubo un bebe que tuve un derrame es un caso esra de lo normal y al ser la muestra no muy grande hay un repunte.
+
+```{r}
+ggplot(datos) +
+  stat_summary_bin(aes(x = age, y = stroke), bins = 10, fun = "mean", geom = "col", fill = "steelblue") +
+  ggtitle("Probabilidad de derrame según Edad, agrupado") +
+  xlab("Age Group") +
+  ylab("Stroke probability") +
+  theme_minimal()
+
+
+```
+
+Este gráfico agrupa a las personas en grupos de 10 en 10, y ya no se muestra ese repunte que se observaba en el gráfico anterior debido que al agruparlos hay más muestras, se sigue observando la misma tendencia a cuanto más edad, mayor es la probabilidad de tener un derrame
+
+```{r}
+# Boxplot para la edad en función de si se sufrió un derrame cerebral
+ggplot(train, aes(x = (stroke), y = age, fill = stroke)) +
+  geom_boxplot() + theme_minimal() + labs(title = "Distribución de la Edad según Derrame Cerebral", x = "Derrame Cerebral", y = "Edad")
+```
+
+La gente con mayor edad a tenido un derrame.
+Hay dos casos aislados mas abajo de un bebe y un joven pero tras ivestigar si es posible que un bebe tenga un derrame por lo que es algo anomalo pero no imposible.
+Por lo que en proporción a cuanto más edad tengamos más probable sera que tengamos un derrame
+
+### Stroke vs BMI
+
+```{r}
+ggplot(na.omit(train), aes(x = bmi, color = stroke)) +
+  geom_density(lwd = 2, linetype = 1) +
+  theme_minimal() +
+  labs(title = "Distribución de BMI según densidad de Derrame Cerebral",
+       x = "BMI", y = "Densidad")
+```
+
+El primer gráfico muestra la frecuencia de que una persona tuviera un derrame según su bmi.
+En este gráfico no podemos observar ninguna tendencia muy bien y se podria lleagr a decir que el bmi no afecta en tener un derrame.
+
+Pero si lo comparamos el segundo confirmamos lo que decíamos previamente, y el bmi no afecta al riesgo de tener un derrame cerebral o aumenta muy ligeramnete el riesgo.
+
+```{r}
+# Boxplot para BMI según si ha habido un derrame cerebral
+ggplot(na.omit(train), aes(x = stroke, y = bmi, fill = stroke)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Distribución del BMI según Derrame Cerebral", x = "Derrame Cerebral", y = "Índice de Masa Corporal (BMI)") +
+  scale_fill_manual(values = c("lightblue", "lightcoral"))
+
+```
+
+En el boxplot se observa lo visto anteriormente, que el bmi no tiene mucha relevancia en cuanto a tener un derrame.
+
+
+### Stroke vs Glucosa
+
+```{r}
+# Boxplot para los niveles de glucosa en función de si se sufrió un derrame cerebral
+ggplot(na.omit(train), aes(x = stroke, y = avg_glucose_level, fill = stroke)) + geom_boxplot() + theme_minimal() + labs(title = "Distribución de la Glucosa Promedio según Derrame Cerebral", x = "Derrame Cerebral", y = "Nivel de Glucosa")
+
+```
+
+Se ha estudiado la relacion entre la glucosa y stroke.
+Se observa que tienen una relacion entre cuanto mas alto tengas el nivel de glucosa mas gente puede llegar a tener un derrame
+
+
+
+```{r}
+
+ggplot(train, aes(x = avg_glucose_level, color = factor(stroke))) +
+  geom_density(lwd = 2, linetype = 1, na.rm = TRUE) +
+  theme_minimal() +
+  labs(title = "Distribución de Nivel de Glucosa según Densidad de Derrame Cerebral",
+       x = "Nivel de Glucosa", y = "Densidad")
+
+```
+
+En este gráfico de la Distribución de Nivel de glucosa según la densidad de Derrame Cerebral, se puede observar lo dicho anteriormente que ha cuanto mayor sea el nivel de glucosa mayor sera la probabilidad de que se tenga un derrame.
+
+Las personas sin derrame cerebral tienden a tener niveles de glucosa más concentrados en rangos bajos (80-100)
+```{r}
+ggplot(train, aes(x = age, y = avg_glucose_level, color = factor(stroke))) +
+  geom_point(alpha = 0.6, size = 2) +
+  theme_minimal() +
+  labs(title = "Relación entre Edad y Nivel de Glucosa según Derrame Cerebral",
+       x = "Edad", y = "Nivel de Glucosa",
+       color = "Derrame Cerebral")
+
+```
+
+En este gráfico se corrobora lo mencionado anteriormente a cuanto mas edad, es decir mas a la derecha muchas más proporción de la muestra sufre un derrame. Y a cuanto más glucosa también
+
+### Stroke vs Heart disease
+```{r}
+
+ggplot(train, aes(x = heart_disease, fill = factor(stroke))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proporción de Derrames Cerebrales según problemas del corazón", x = "Problemas Cardíacos", y = "Proporción")
+
+```
+
+Este gráfico de barras apiladas muestra la proporción de derrames cerebrales (stroke) en función de si una persona tiene problemas cardíacos o no.
+
+La proporción de personas con derrame cerebral es mayor en el grupo con problemas cardíacos, lo que nos dice que si hemos sufrido de algún problema del corazon somos más propensos a tener un derrame.
+
+### Stroke vs Hipertension
+
+```{r}
+
+ggplot(train, aes(x = hypertension  , fill = factor(stroke))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proporción de Derrames Cerebrales según hipertension", x = "Hipertension", y = "Proporción")
+
+```
+
+
+### Stroke vs Smoking Status
+
+```{r}
+# Gráfico de barras para el estado de tabaquismo binarizado según el derrame cerebral
+ggplot(train, aes(x = smoking_status, fill = factor(stroke))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proporción de Derrames Cerebrales según Estado de Tabaquismo", x = "Estado de Tabaquismo", y = "Proporción")
+
+```
+
+Este gráfico de barras apiladas muestra la proporción de personas que han sufrido un derrame cerebral ("stroke") según su estado de tabaquismo.
+
+En todas las categorías de tabaquismo, la proporción de personas que han sufrido un derrame cerebral es pequeña en comparación con las que no han sufrido uno. 
+Se observa un pequeño aumento en las personas que han llegado a fumar alguna vez
+
+```{r}
+
+ggplot(train, aes(x=smoking_status , y=age, fill=smoking_status )) + 
+  geom_violin()
+```
+En el gráfico se puede observar la distribución de las personas según su edad y estado de tabaquismo.
+
+se observa que hay bastantes NA pero la mayoría corrresponde ha población joven incluso niños, esto puede ser debido a que es algo a lo que los niños no pueden responder.
+
+También se observa que no hay poblacion que sea niño que se sepa si fuma o no, son todos NA.
+
+Otra cosa a resaltar en que la población que ha fumado alguna vez es población mayo de mas de 60 años mayoritariamente. Debido a esto se puede deber el aumento de proporción de gente que sufre derrames de la categoria fomerly smokes
+
+
+
+### Stroke vs work type
+
+```{r}
+# Gráfico de barras para 'work_type' según si ha habido un derrame cerebral
+ggplot(train, aes(x = work_type, fill = factor(stroke))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Distribución de 'Work Type' según Derrame Cerebral", x = "Tipo de Trabajo", y = "Proporción")
+
+```
+
+En este gráfico se relaciona el tipo de trabajo con stroke.
+Se observa que en proporción los que trabajan para si mismos y trabajan para el sector privado tienen mas derrames.
+Pero no es nada concluyente, ya que es muy ligero la diferencia.
+
+
+```{r}
+ggplot(train, aes(x = work_type, y = age, fill = work_type)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Distribución de Edad según Tipo de Trabajo",
+       x = "Tipo de Trabajo", y = "Edad") +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+En este gráfico se obsrva la relacion entre el tipo trabajo y su edad. Vemos que la población perteneciente a children y nerver_worked son gente joven de menos de 18 años. Debido a esto en la relacion de tipo de trabajo con stroke de esto nos dale muy bajo o nulo la proprcion de stroke.
+
+Por otro lado se observa que los self-employed, son un sector compuesto principalmente por gente de edades altas, debido a esto en el gráfico anterior , la gente perteneciente a self-employed tenia mayor proorción de gente que haya sufrido un derrame.
+
+Por lo que se puede concluir que el tipo de trabajo no influye al si alguien puede ener un derrame, si no que esta mas relacionado con la edad y debido a la edad la categoria self-employed tiene mayor proporción de derrames.
+
+
+
+### Stroke vs Residence type
+
+```{r}
+ggplot(train, aes(x = Residence_type, fill = factor(stroke))) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proporción de Derrames Cerebrales según Residencia (Urbano/Rural)", x = "Tipo de Residencia", y = "Proporción")
+
+```
+
+Se observa la proporción de gente que tiene un derrame según su residencia rural o urbano. Se ven las dos gráficas muy similares por lo que no es algo que influya en si hay un derrame o no.
+
+## Análisis estadistico
+
+### Matriz de correlación de las varibles continuas
+
+La matriz de correlacion mueestra la correlacion entre las variables age, avg_glucose_level y bmi, que son aquellas variables continuas
+
+```{r}
+train_numeric <- na.omit(train[sapply(train, is.numeric)])
+cor_matrix <- cor(train_numeric)
+corrplot(cor_matrix, method = "color", col = colorRampPalette(c("blue", "white", "red"))(200), addCoef.col = "black", tl.col = "black", tl.cex = 0.8, title = "Matriz de correlación")
+```
+
+En la matriz se observa que todas las variables continuas tienen algo de relación pero destaca la relación de edad y bmi, cuanto mas edad tengamos, es más probable de que tengamos un bmi mas alto.
+
+### Calculos estadisticos (media, mediana, desviación...)
+```{r}
+summary(train_numeric)
+sd(train$age)
+sd(train$avg_glucose_level)
+sd(train$bmi, na.rm = TRUE)
+```
+
+
+1. Variable age 
+El valor mínimo registrado es 0.08, lo que indica la presencia de un recién nacido en la muestra.
+El primer cuartil se encuentra en 25.00, lo que significa que el 25% de los individuos tiene menos de esa edad. 
+La mediana es de 44.00, indicando que la mitad de la población analizada tiene menos de 44 años.
+La media es de 42.95, lo que muestra una distribución cercana a la mediana. 
+El tercer cuartil es 61.00, lo que significa que el 75% de los individuos tiene menos de esta edad.
+El valor máximo registrado es 82.00 años. La desviación estándar calculada es de 22.79 años.
+
+2. Variable avg_glucose_level (Nivel Promedio de Glucosa)
+El menor nivel de glucosa registrado es de 55.12 mg/dL, mientras que el primer cuartil se encuentra en 77.52 mg/dL, lo que indica que el 25% de las personas presenta niveles de glucosa por debajo de este valor. 
+La mediana es de 91.89 mg/dL, representando el valor central de la distribución. 
+La media es de 105.79 mg/dL, siendo mayor que la mediana, lo que sugiere la existencia de valores altos que podrían estar afectando la distribución. 
+El tercer cuartil se encuentra en 114.46 mg/dL, indicando que el 75% de los individuos tiene valores inferiores a este umbral. 
+El nivel máximo registrado es de 271.74 mg/dL, lo que sugiere la posible presencia de valores atípicos en la muestra, pero comprendidos entre lo posible por lo que son datos reales. Tiene una desviación tipica de 45,20 por lo que hay bastante dispersión
+
+3. Valor mínimo registrado en la muestra es de 10.30.
+El primer cuartil es 23.50, lo que indica que el 25% de las personas tiene un IMC menor a este valor. 
+La mediana es de 28.00, lo que refleja una tendencia al sobrepeso en la población analizada según los criterios de la Organización Mundial de la Salud (OMS). 
+La media del IMC es de 28.83, lo que reesrza la tendencia observada en la mediana. 
+El tercer cuartil es 33.02, indicando que el 75% de las personas tiene un IMC por debajo de este valor. 
+El valor máximo registrado es de 97.60, lo cual es un dato anormalmente alto
+pero es algo posble por lo que no podemos eliminarlo de la base de datos. 
+
+
+### Test de wilcox para ver si hay diferencias significativas
+```{r}
+# Test de WIlcox
+wilcox_age <- wilcox.test(age ~ stroke, data = train)
+
+# Test de wilcox
+wilcox_glucose <- wilcox.test(avg_glucose_level ~ stroke, data = train)
+
+# Test de wilcox
+wilcox_bmi <- wilcox.test(bmi ~ stroke, data = train, na.action = na.omit) # Omitimos los NA
+
+# Resultados
+cat("Resultado Wilcox: p =", wilcox_age$p.value, "\n")
+cat("Resultado Wilcox: p =", wilcox_glucose$p.value, "\n")
+cat("Resultado Wilcox: p =", wilcox_bmi$p.value, "\n")
+
+```
+
+Cuanto el vaor de p sea menor más diferencias habrá, por lo que más relevante sera esa variable. Esto nos indica lo anteriormente dicho que las variables de edad y nivel de gluocasa tienen bastante relevancia sobre si alguien tiene un derrame y que la variable bmi no tiene tanto peso.
+
+# PCA para reducción de dimensionalidad
+
+## PCA con prcomp
+
+```{r}
+PCA <- prcomp(~bmi + age + avg_glucose_level, data = train, scale =TRUE)
+plot(PCA)
+```
+
+```{r}
+summary(PCA)
+```
+
+Podemos comprobar como la primera componente principal es la más relevante, ya que captura el 50.83% de la varianza total de los datos.
+Esto significa que PC1 representa la dirección en la que los datos varían más.
+La segunda componente principal, aunque captura menos varianza, 27.58%, sigue siendo significativa, ya que representa la segunda dirección de máxima varianza en los datos.
+Finalmente, la tercera componente principal explica el 21.58% de la varianza restante, y aunque sigue siendo relevante, como la primera y segunda componente cubren aproximadamente al 80% de la varianza de los datos, trabajaremos con estas dos.
+
+```{r}
+cat("\nMatriz de rotación o de pesos W: \n")
+PCA$rotation
+```
+
+En la matriz de pesos se muestran valores que indican la correlacón entre las variables originales y los componentes prinicpales.
+
+PC1 está influenciado por todas las variables, con correlaciones negativas para BMI, age y avg_glucose_level.
+A medida que estas variables aumentan, el valor de PC1 disminuye, entonces PC1 captura la variabilidad asociada a estas tres variables.
+PC2 está principalmente influenciado por el avg_glucose_level, con una correlación negativa, lo que implica que un mayor nivel de glucosa está relacionado con un menor valor de PC2.
+En menor medida, PC2 también está influenciado por el BMI, con una correlación positiva.
+Enotnces PC2 captura la variabilidad que está relacionada tanto por el nivel de glucosa como por el índice de masa corporal, organizando a las personas principalmente según estas dos variables.
+PC3 está esrtemente influenciado por la edad, con una correlación positiva, lo que indica que un mayor valor en PC3 está asociado con una mayor edad.
+Además, PC3 tiene una correlación negativa con el BMI, lo que sugiere que PC3 captura la variabilidad relacionada con la edad y el índice de masa corporal.
+
+En resumen, PC1 está influenciado por todas las variables de manera negativa, PC2 destaca el nivel de glucosa y el BMI, y PC3 está más enfocado en la edad y el BMI.
+
+## PCA sin usar una funcón definida para obtenerlas componentes principales
+
+Seleccionar solo las variables continuas y estandarizarlas:
+
+```{r}
+datos_cont <- train[, c("bmi", "age", "avg_glucose_level")]
+datos_cont <- na.omit(datos_cont)  
+datos_estandarizados <- scale(datos_cont)
+```
+
+Calcular la matriz de covarianza:
+
+```{r}
+matriz_cov <- cov(datos_estandarizados)
+```
+
+Obtener los autovalores y autovectores, y ordenarlos de mayor a menor:
+
+```{r}
+eig <- eigen(matriz_cov)
+autovalores <- eig$values
+autovectores <- eig$vectors
+orden <- order(autovalores, decreasing = TRUE)  # Indices para ordenar 
+autovalores <- autovalores[orden]  # Reordenar autovalores
+autovectores <- autovectores[ ,orden]  # Reordenar autovectores
+
+autovectores
+```
+
+Los autovectores obtenidos son los mismos que la matriz de pesos ob tenida con prcomp() pero multiplicados por -1.
+Esto no cambia su interpretación, solo la dirección a la que apuntan las componentes principales.
+
+Transformar los datos al nuevo espacio de componentes principales:
+
+```{r}
+PCA_manual <- as.matrix(datos_estandarizados) %*% autovectores  
+```
+
+Calcular la varianza por cada componente principal
+
+```{r}
+varianza_explicada <- autovalores / sum(autovalores)
+varianza_explicada
+```
+
+La varianza coincide con la calculada con prcomp().
+
+Vamos a comparar PC1 a PC2
+
+```{r}
+plot(PCA$x[,1:2],pch=19)
+```
+
+```{r}
+biplot(PCA)
+```
+
+El eje X representa la primera componente principal y el eje Y la segunda.
+Como se ha mencionado en la matriz de pesos, a mayor valor de las variables, menor valor de PC1.
+Por lo tanto, cuanto más a la izquierda estén los puntos, mayor será su nivel de glucosa medio, BMI y edad.
+Y más a la derecha, menor será el valor de estas variables.
+PC2 está principalmente influenciado por el nivel de glucosa medio, con una correlación negativa.
+Esto se representa en el mapa como a mayor altura de los puntos, menor nivel de glucosa.
+Además, PC2 también está influenciado por el BMI, con una correlación positiva, por lo tanto, a mayor altura en el mapa, mayor nivel de BMI.
+En el mapa destacan dos puntos en la parte superior izquierda.
+Esto indica que estas observaciones tienen valores altos en todas las variables especialmente en bmi, pero su nivel de glucosa no es tan alto en comparación con las otras dos variables al estar en una zona más alta.
+
+# Aprendizaje no supervisado
+
+Lo primero que debemos tener en cuenta para el aprendizaje no supervisado es la elección de la métrica que vamos a utilizar.
+Dado que hemos aplicado PCA sobre las variables continuas, trabajaremos con los componentes principales, que son numéricos.
+En este caso, utilizaremos la distancia euclidia.
+
+```{r}
+pca_data <- PCA$x[, 1:2]
+dist_euclidia <- dist(pca_data, method = "euclidean")
+```
+
+La distancia euclidia debe cumplir con las siguientes propiedades para ser considerada una métrica o medida de desemejanza.
+
+La primera métrica que debe de cumplir es la coincidencia: $(\delta(x,y)=0\leftrightarrow x=y)$.
+
+```{r}
+obs1 <- pca_data[1, ]
+obs2 <- obs1
+
+# Calcular la distancia euclidia 
+coincidencia <- dist(rbind(obs1, obs2), method = "euclidean")
+coincidencia
+```
+
+Da 0, por lo tanto cumple la coincidencia
+
+La segunda es no negatividad: $(\delta(x,y)\geq0)$.
+
+```{r}
+obs2 <- pca_data[2, ]
+
+no_neg <- dist(rbind(obs1, obs2), method = "euclidean")
+no_neg
+```
+
+Da mayor que 0, por lo que cumple la no negatividad.
+
+La tercera es simetría $(\delta(x,y)=\delta(y,x))$.
+
+```{r}
+sim_xy <- dist(rbind(obs1, obs2), method = "euclidean")
+sim_yx <- dist(rbind(obs2, obs1), method = "euclidean")
+sim_xy -sim_yx
+```
+
+Al dar la resta 0 las dos tiene el mismo valor, cumple la simetría.
+
+Con esto hemos comprobado que es una medida de desemejanza, pero si ademas verifica la desigualdad triangular $(\delta(x,y)\leq\delta(x,z)+\delta(y,z))$ se tratará de una distancia.
+
+```{r}
+obs3 <- pca_data[3, ]
+
+dt_xy <- dist(rbind(obs1, obs2), method = "euclidean")
+dt_xz <- dist(rbind(obs1, obs3), method = "euclidean")
+dt_yz <- dist(rbind(obs2, obs3), method = "euclidean")
+dt_xz + dt_yz - dt_xy
+```
+
+Al dar mayor o igual que 0 comprobamos la desigualdad, hemos comprobado que la distancia euclidia cumple con la desigualdad triangular.
+Al cumplir con las propiedades de una medida de desemejanza y, además, verifica la desigualdad triangular, por lo que se trata de una distancia
+
+## Clustering no jerárquico
+
+```{r}
+fviz_nbclust(pca_data, kmeans, method = "wss") + labs(title = "Método del Codo")
+```
+
+Para saber el valor que le tenemos de asignar a k usamos el método del codo, en este caso parece que 3 es una buena elección para el número óptimo de clusters.Debido a que la recta tiende a ser continua a partir del 3.
+
+```{r}
+k3 <- kmeans(pca_data, centers = 3, nstart = 20)
+fviz_cluster(k3, data = pca_data, geom = "point")
+```
+
+Como podemos observar en este cluster , se separan ,muy claramente en 3 , aunque podemos apreciar un par de datos que pueden ser outliers en el cluster 3.
+
+```{r}
+# Obtener los centroides
+centroides <- k3$centers[k3$cluster, ]
+
+# Calcular distancias euclidianas de cada punto a su centroide
+distancias <- sqrt(rowSums((pca_data - centroides)^2))
+
+# Ver las distancias más altas (posibles outliers)
+outliers <- order(distancias, decreasing = TRUE)[1:2]  # Tomamos los 2 más alejados
+print(outliers)
+pca_limpio <- pca_data[-outliers, ]  # Eliminar filas con outliers
+k3_limpio <- kmeans(scale(pca_limpio), centers = 3, nstart = 20)
+fviz_cluster(k3_limpio, data = scale(pca_limpio))  # Visualizar el nuevo clustering
+```
+
+Tras eliminar los outliers los clusters se ven más definidos y compactos.
+Observamos una mejor separación entre los tres grupos, lo que indica que la eliminación de outliers nos ha ayudado a mejorar la estructura del clustering.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Convertir pca_limpio a un dataframe potwue es una matriz
+df_clusterizado <- as.data.frame(pca_limpio)
+
+# Agregar la columna de cluster como factor
+df_clusterizado$cluster <- as.factor(k3_limpio$cluster)
+
+# Transformar el dataset a formato largo para ggplot
+df_long <- df_clusterizado %>%
+  pivot_longer(cols = -cluster, names_to = "variable", values_to = "valor")
+
+# Graficar boxplots para cada variable según el cluster
+ggplot(df_long, aes(x = cluster, y = valor, fill = cluster)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distribución de Variables por Cluster", x = "Cluster", y = "Valor")
+
+```
+
+Observando el siguiente boxplot que representa la distribución de cada variable por cluster.
+PC1 parece ser la variable más representativa para separar los clusters, ya que el Cluster 2 y el Cluster 3 están bien diferenciados a lo largo de esta componente.
+PC2 tiene una menor capacidad de diferenciación, aunque sigue mostrando cierta separación, especialmente entre Cluster 1 y Cluster 3.
+Posibles outliers en PC2 (Cluster 3): Se observan algunos valores atípicos (puntos negros) en PC2, especialmente en Cluster 3,como hemos mencionado anteriormente.
+
+```{r}
+#metodo silueta
+fviz_nbclust(pca_data, kmeans, method = "silhouette")
+sil <- silhouette(k3$cluster, dist(pca_data))
+fviz_silhouette(sil)
+
+```
+
+El gráfico de análisis de silueta evalúa la calidad del clustering.
+A partir del cual podemos sacar algunas conclusiones,el valor promedio de la silueta (0.47).Un valor cercano a 1 indica que los clusters están bien separados.Un valor cercano a 0 sugiere que los puntos están en el límite entre clusters.En nuestro caso, 0.47 indica una separación moderada, pero puede haber cierta superposición.
+Distribución de los clusters: -El cluster  (3) tiene la mayoría de los datos y una buena cohesión, aunque algunos puntos tienen baja silueta.
+-El cluster  (2) es más pequeño y está mejor definido.
+-El cluster  (1) tiene una forma más dispersa y algunos valores cercanos a 0, lo que indica que algunos puntos pueden estar mal asignados.Y pueden deberse a los outliers que hemos mencionado antes
+
+El clustering es aceptable, pero podría mejorarse para lograr una mejor separación de los grupos.
+
+## Clustering jerárquico
+
+```{r}
+# Método de Ward
+hc5 <- hclust(dist_euclidia, method = "ward.D2" )
+
+# Cortamos en 3 clusters
+sub_grp <- cutree(hc5, k = 3)
+
+# Visualizamos el corte
+plot(hc5, cex = 0.6)
+rect.hclust(hc5, k = 3, border = 2:5)
+
+# Número de observaciones en cada cluster
+table(sub_grp)
+# Visualización
+fviz_cluster(list(data=pca_data,cluster=sub_grp))
+
+
+```
+
+Hemos generado un dendograma mediante el método de Ward para así ver las distancias y saber en cuantos grupos dividir nuestros datos , y nuestra eleccón ha sido 3 al igual que en los no jerárquicos. Los cluster 2 y 3 se ven modificados respectos a los no jerarquicos y como hemos comprobado con el método de la silueta , no son perfectos y se pueden mejorar las diferentes agrupaciones.
+
+# Conclusión
+
+El objetivo de este análisis es aplicar técnicas de aprendizaje automático para analizar los factores que pueden influir en la probabilidad de sufrir un derrame cerebral, utilizando un conjunto de datos disponible en Kaggle, que incluye diversas variables de salud de los pacientes.
+El desarrollo incluye la comprensión del problema, la preparación y exploración de los datos, la reducción de dimensionalidad mediante análisis de componentes principales, y la aplicación de técnicas de clustering no supervisado.
+El conjunto de datos nos ha proporcionado información valiosa sobre pacientes y sus características de salud, lo que nos permitió identificar variables clave.
+
+A través del análisis exploratorio de datos, identificamos relaciones significativas entre la variable objetivo y el resto de variables, como la relación entre la edad y la probabilidad de sufrir un derrame cerebral, así como la influencia de factores como los problemas cardíacos y los niveles de glucosa.
+También observamos que algunas variables, como el tipo de residencia o el estado de tabaquismo, no mostraban una relación clara con la variable objetivo, por lo que no las hemos considerado relevantes para la predicción.
+
+Utilizamos PCA para reducir la dimensionalidad de las variables continuas, lo que nos ha permitido capturar la mayor parte de la varianza con dos componentes principales.
+Esto simplificó el análisis posterior y facilitó la visualización de los datos en un espacio de menor dimensión.
+
+En la fase de aprendizaje no supervisado, aplicamos técnicas de clustering, tanto jerárquicas como no jerárquicas, para identificar grupos en los datos.
+Utilizamos la distancia euclidia como métrica, verificando que cumplía con las propiedades necesarias para ser considerada una medida de desemejanza válida.
+El método del codo nos ayudó a determinar el número óptimo de clusters, y los resultados mostraron una agrupación de los datos en función de las características de los pacientes.
+También hemos creado un boxplot para así saber acerca de que variables pertenecen cada cluster y hemos conseguido comprender que variables logran tener más importancia para así diferenciarse de las demás . En nuestro caso hemos usado variables del PCA porque son las más relevantes.
+Para comprobar como de bien quedan separados los cluster hemos utilizado el método de la silueta, el cual nos ha ayudado a ver que nuestros clusters calculados están bien pero podrían ser mejorados.
+Este proyecto nos permitió aplicar conceptos teóricos de aprendizaje automático a un problema real, destacando la importancia de la preparación de datos y el análisis exploratorio como pasos fundamentales antes de la modelización que nos facilitaron trabajar a posteriori con los datos.
+
+En conclusión, el análisis realizado ha permitido obtener información valiosa sobre los factores que influyen en la probabilidad de sufrir un derrame cerebral y se ha logrado una comprensión más profunda del conjunto de datos.
+Estos resultados pueden servir como base para desarrollar modelos predictivos que nos ayuden a identificar a las personas con mayor riesgo de sufrir un derrame cerebral, lo que a su vez podría contribuir a la prevención y el tratamiento oportuno de este problema de salud.
+
+# Parte 2
+##Nuevos imports
+
+```{r}
+test$gender <- factor(test$gender)
+test$ever_married <- factor(test$ever_married)
+test$Residence_type <- factor(test$Residence_type)
+test$smoking_status <- factor(test$smoking_status)
+test$work_type <- factor(test$work_type)
+test$hypertension <- factor(test$hypertension)
+test$heart_disease <- factor(test$heart_disease)
+test$stroke <- factor(test$stroke)
+test <- test[, -which(names(test) == "id")]
+```
+
+## Regresión Logistica
+```{r}
+# Ajustar el modelo de regresión logística
+modelo_logistico <- glm(stroke ~ age + bmi + avg_glucose_level + smoking_status + 
+                          hypertension + heart_disease, 
+                        data = train, 
+                        family = "binomial")
+
+```
+
+
+
+```{r}
+predicciones_log <- predict(modelo_logistico, newdata = train, type = "response")
+
+#Clasificación con un umbral de 0.1
+
+predicciones_clase_log <- ifelse(predicciones_log > 0.1, "Yes", "No")
+
+# Crear matriz de confusión
+tabla_confusion_log <- table(Predicted = predicciones_clase_log, Actual = train$stroke)
+print(tabla_confusion_log)
+
+```
+Verdaderos Negativos (TN): 2460 - Casos correctamente identificados como sin stroke
+
+Falsos Negativos (FN): 50 - Casos con stroke que el modelo no detectó (error tipo II)
+
+Falsos Positivos (FP): 353 - Casos sin stroke clasificados erróneamente como stroke (error tipo I)
+
+Verdaderos Positivos (TP): 77 - Casos correctamente identificados como stroke
+
+Se seleccionó un umbral bajo (0.1) para maximizar la detección de casos reales de accidente cerebrovascular, priorizando la sensibilidad sobre la precisión. Esta decisión se basa en que las consecuencias de no detectar un stroke (falso negativo) son mucho más graves que las de generar falsos positivos.
+
+```{r}
+# Calcular precisión
+accuracy <- sum(diag(tabla_confusion_log)) / sum(tabla_confusion_log)
+print(paste("Precisión:", round(accuracy, 3)))
+```
+
+Al calcular la precisión obtenemos una precisión de 86,3%, lo que nos indica que el modelo logístico falla el 13.7% de las veces.
+
+```{r}
+# Curva ROC
+roc_log <- roc(train$stroke, predicciones_log)
+plot(roc_log, main = "Curva ROC para Regresión Logística")
+```
+
+La curva de ROC nos sirve para identificar si el modelo es capaz de discriminar entre clases, en este se caso se observa que la curva esta por encima de la diagonal y asciende rapidamente..
+
+```{r}
+# Calcular AUC
+auc_valor <- auc(roc_log) 
+print(paste("AUC:", round(auc_valor, 3)))
+```
+Obtenemos un AUC de 0.86 lo que nos señala que el modelo tienen capacidad para discriminar ente clases ya que el  valor es  muy cercano a 1.
+
+
+```{r}
+# Predecir probabilidades con el modelo de regresión logística
+
+
+prob_logistic <- predict(modelo_logistico, newdata = test, type = "response")
+
+# Clasificar con un umbral (ajustable, aquí 0.1)
+pred_logistic <- ifelse(prob_logistic > 0.1, 1, 0)
+# Convertir a factor para métricas
+pred_logistic <- factor(pred_logistic, levels = c(0, 1))
+test$stroke <- factor(test$stroke, levels = c(0, 1))
+conf_matrix_logistic <- confusionMatrix(pred_logistic, test$stroke, positive = "1")
+print(conf_matrix_logistic)
+
+
+roc_log_test <- roc(test$stroke, prob_logistic)
+plot(roc_log)
+```
+```{r}
+auc_log_test <- auc(roc_log_test)
+cat("AUC Regresión Logística (Test):", round(auc_log_test, 3), "\n")
+```
+
+## Análisis Discriminante Lineal
+
+El análisis discriminante lineal es una técnica estadística de clasificación supervisada utilizada para encontrar una combinación lineal de variables que discrimine dos o más grupos. Se basa en la idea de modelar la distribución de cada clase y aplicar el criterio de Bayes para asignar nuevas observacones a una de ellas.Se trata de un algoritmo de clasificación.
+
+Observando nuestros datos, podemos ver que no siguen una distribución normal los datos por lo tanto no podemos aplicar el Análisis Discriminante Lineal (LDA), por lo tanto vamos a simular unos datos normales para así usarlo y lograr comprenderlo.
+
+
+```{r}
+
+library(MASS)
+# Semilla para reproducibilidad
+set.seed(311205)
+
+# Conjunto de datos artificial
+n <- 142  # número de observaciones por clase
+p <- 2    # número de variables
+
+class_0 <- matrix(rnorm(n * p, mean = 0), ncol = p)
+class_1 <- matrix(rnorm(n * p, mean = 3), ncol = p)
+data <- rbind(class_0, class_1)
+labels <- factor(c(rep(0, n), rep(1, n)))
+df <- data.frame(x1 = data[, 1], x2 = data[, 2], class = labels)
+
+# Visualización de los datos originales
+plot(df$x1, df$x2, col = df$class, pch = 19, xlab = "Variable 1", ylab = "Variable 2", main = "Datos Originales")
+legend("topright", legend = levels(df$class), col = 0:length(levels(df$class)), pch = 19)
+
+# LDA
+lda_model <- lda(class ~ x1 + x2, data = df)
+
+# Puntuaciones proyectadas en el espacio discriminante de LDA
+lda_predictions <- predict(lda_model)
+
+# PCA
+pca_model <- prcomp(df[, -3], center = TRUE, scale. = TRUE)
+
+# Puntuaciones proyectadas en el espacio de PCA
+pca_predictions <- pca_model$x
+
+# Graficar LDA y PCA
+par(mfrow = c(1, 2))
+
+# Gráfico de LDA
+plot(lda_predictions$x[, 1], rep(0, length(lda_predictions$x[, 1])), col = df$class, 
+     xlab = "Componente discriminante 1", ylab = "", 
+     main = "Proyección de LDA", pch = 19)
+legend("topright", legend = levels(df$class), col = 1:length(levels(df$class)), pch = 19)
+
+# Gráfico de PCA
+plot(pca_predictions[, 1], pca_predictions[, 2], col = df$class,
+     xlab = "Componente principal 1", ylab = "Componente principal 2", 
+     main = "Proyección de PCA", pch = 19)
+legend("topright", legend = levels(df$class), col = 1:length(levels(df$class)), pch = 19)
+
+```
+
+Hemos observado que el LDA ha logrado una buena separación de las clases, lo que indica que las variables originales (Variable 1 y Variable 2) contienen suficiente información para discriminar entre las clases. Al ser un método supervisado que utiliza la información de clase, el LDA ha encontrado una dirección en el espacio de características que maximiza la separación entre las dos clases.
+
+Por otro lado, el PCA, aunque es útil para la reducción de dimensiones, no tiene en cuenta la información de las clases, por lo que la separación observada en la proyección es menos clara que en el LDA. El PCA se centra en la varianza de los datos, sin considerar cómo están distribuidas las clases.
+
+## K-Vecinos
+
+Vamos a aplicar el algoritmo de K-Vecinos más Cercanos (KNN) para predecir si una persona puede llegar a sufrir un derrame cerebral (stroke). Este algoritmo se basa en una idea sencilla: cuando queremos saber a qué grupo pertenece una nueva persona, buscamos los “k” casos más parecidos a ella en el conjunto de datos, y la clasificamos según la mayoría de esos vecinos. Por ejemplo, si la mayoría de sus vecinos han tenido un derrame, el modelo la clasifica como alguien con riesgo.
+
+Para utilizar este modelo de la mejor manera posible, hemos probado diferentes valores del parámetro k, que indica cuántos vecinos se deben tener en cuenta. Esta búsqueda la hemos hecho de forma ordenada, probando todos los valores de k desde 1 hasta 30, mediante una técnica llamada Grid Search, que nos ayuda a encontrar el valor más adecuado. Además, durante el entrenamiento, hemos usado validación cruzada, que consiste en hacer varias particiones del conjunto de entrenamiento para asegurarnos de que el modelo no se adapte demasiado a un único grupo de datos.
+
+Una vez elegido el mejor modelo, lo hemos probado con un conjunto de datos nuevo (conjunto de prueba) para comprobar si realmente funciona bien. Como en nuestros datos hay muy pocos casos de personas que han sufrido un derrame, nos interesa no solo ver cuántas veces acierta el modelo en total, sino especialmente si es capaz de detectar a quienes sí han tenido un derrame.
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(caret)
+
+# Primero convierto las variables categóricas a factores en los datos de entrenamiento
+train$gender <- as.factor(train$gender)
+train$ever_married <- as.factor(train$ever_married)
+train$work_type <- as.factor(train$work_type)
+train$Residence_type <- as.factor(train$Residence_type)
+train$smoking_status <- as.factor(train$smoking_status)
+
+# Hago lo mismo con las variables binarias para que se traten como categorías
+train$hypertension <- as.factor(train$hypertension)
+train$heart_disease <- as.factor(train$heart_disease)
+
+# Repito el mismo tratamiento en los datos de prueba
+test$gender <- as.factor(test$gender)
+test$ever_married <- as.factor(test$ever_married)
+test$work_type <- as.factor(test$work_type)
+test$Residence_type <- as.factor(test$Residence_type)
+test$smoking_status <- as.factor(test$smoking_status)
+test$hypertension <- as.factor(test$hypertension)
+test$heart_disease <- as.factor(test$heart_disease)
+
+# Reemplazo los valores NA de 'bmi' y 'avg_glucose_level' con la media de cada columna (evito errores por datos faltantes)
+train$bmi[is.na(train$bmi)] <- mean(train$bmi, na.rm = TRUE)
+train$avg_glucose_level[is.na(train$avg_glucose_level)] <- mean(train$avg_glucose_level, na.rm = TRUE)
+test$bmi[is.na(test$bmi)] <- mean(test$bmi, na.rm = TRUE)
+test$avg_glucose_level[is.na(test$avg_glucose_level)] <- mean(test$avg_glucose_level, na.rm = TRUE)
+
+# Escalo (normalizo) las variables numéricas para que todas estén en la misma escala
+# Esto es necesario porque KNN usa distancias y las magnitudes influyen
+train[, c("age", "avg_glucose_level", "bmi")] <- scale(train[, c("age", "avg_glucose_level", "bmi")])
+test[, c("age", "avg_glucose_level", "bmi")] <- scale(test[, c("age", "avg_glucose_level", "bmi")])
+
+# Defino la validación cruzada: 10 folds repetidos 3 veces para mayor estabilidad
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+# Defino la métrica con la que voy a comparar los modelos (en este caso, la precisión)
+metric <- "Accuracy"
+
+# Establezco una semilla para garantizar que los resultados sean reproducibles
+set.seed(1271)
+
+# Creo un grid de valores de k a probar (de 1 a 30) para hacer Grid Search
+grid <- expand.grid(.k = seq(1, 30, by = 1))
+
+# Entreno el modelo KNN usando Grid Search con los datos de entrenamiento
+# Aquí estoy buscando cuál es el mejor valor de k según validación cruzada
+fit.knn <- train(stroke ~ ., data = train,
+                 method = "knn",
+                 metric = metric,
+                 tuneGrid = grid,
+                 trControl = trainControl)
+
+# Guardo el valor óptimo de k encontrado por Grid Search
+knn.k.optimo <- fit.knn$bestTune
+print(fit.knn)  # Imprimo los resultados del entrenamiento (precisiones por cada k)
+
+# Grafico los resultados de la búsqueda de k para ver cómo varía la precisión
+plot(fit.knn)
+
+# Establezco una semilla para hacer predicciones de forma reproducible
+set.seed(128)
+
+# Obtengo las probabilidades predichas de pertenecer a la clase positiva ("1")
+# Esta es la probabilidad de que ocurra un stroke
+prediction.knn <- predict(fit.knn, newdata = test, type = "prob")[, 2]
+
+# Aplico un umbral de decisión: si la probabilidad es mayor que 0.5, predigo "1", si no, predigo "0"
+# Esto convierte probabilidades en etiquetas
+clase.pred.knn <- ifelse(prediction.knn > 0.5, "1", "0")
+
+# Evaluo el modelo comparando las clases predichas con las reales (usando matriz de confusión)
+cf <- confusionMatrix(as.factor(clase.pred.knn), as.factor(test$stroke), positive = "1")
+print(cf)  # Imprimo la matriz de confusión con métricas como Accuracy, Sensibilidad, Especificidad
+
+```
+
+A partir del modelo KNN que hemos entrenado y evaluado, podemos ver que aunque la precisión general alcanza un valor elevado (~95%), el comportamiento del modelo es bastante malo. En particular, detectamos que no es capaz de identificar correctamente ningún caso positivo de derrame cerebral, es decir, todos los pacientes con stroke esron clasificados como negativos.
+
+Esto lo podemos ver reflejado en la sensibilidad igual a 0, lo que significa que nuestro modelo no está el objetivo que estamos busacndo en él, que sería identificar pacientes en riesgo de sufrir un derrame.Este resultado es coherente con el desequilibrio de clases presente en los datos: solo alrededor del 5% de los pacientes realmente presentan un derrame cerebral, mientras que el 95% restante no lo tiene.
+
+El gráfico de validación cruzada muestra que al aumentar el número de vecinos k, se estabiliza la precisión, lo que nos sugiere que el modelo favorece predicciones conservadoras, clasificando siempre en favor de la clase mayoritaria. Sin embargo, esto aumenta el problema de desbalance, haciendo que el modelo ignore la clase minoritaria (los positivos).
+
+En resumen, aunque numéricamente la precisión parezca buena, el modelo falla bastante en su uso. 
+
+
+## Árbol de decisiones
+
+Si intentamos hacer un árbol de decisión con nuestros datos actuales, independientemente de hacer grid search o no, solo obtenemos un único nodo.
+
+```{r}
+tree <- rpart(stroke ~ ., 
+                    data = train, 
+                    parms = list(split = "gini"),)
+
+rpart.plot(tree)
+```
+
+Si observamos como está distribuida nuestra variable target podemos ver como hay un desequilibrio de clases muy marcado.
+
+```{r}
+table(train$stroke)
+prop.table(table(train$stroke))
+```
+
+Hay un gran desequilibrio, solo un 5% de casos positivos de derrame cerebral frente a un 95% de casos negativos. El algoritmo de árbol de decisión puede no ser el más indicado para nuestro dataset. Pero podemos hacer un submuestreo que nos permita equilibrar las clases y así poder generar un árbol que revelé patrones predictivos.
+
+```{r}
+set.seed(123)
+
+# Coger todos los casos positivos
+train_equilibrado <- train[!is.na(train$bmi), ]
+
+stroke_si <- train_equilibrado[train_equilibrado$stroke=="1",]
+
+# Coger muestra aleatoria de casos negativos
+stroke_no <- train_equilibrado[train_equilibrado$stroke=="0",][sample(nrow(train_equilibrado[train_equilibrado$stroke == 0, ]), nrow(stroke_si)), ]
+
+# Combinar los datos balanceados
+train_equilibrado <- bind_rows(stroke_si, stroke_no)
+train_equilibrado$stroke <- factor(train_equilibrado$stroke, levels = c(0, 1), labels = c("No", "Yes"))
+
+
+# Verificar distribución
+table(train_equilibrado$stroke)
+```
+
+Hay que tener en cuenta que estamos descartando la gran mayoría de los casos, por lo que es muy probable estar eliminando patrones importante, además de que al hacer un 50-50 de los datos no estamos reflejando la realidad donde solo una minoría tiende a tener derrames y por tanto lo que predizcamos no representará la realidad.
+
+Pese a esto, creemos interesante aplicarlo en nuestro trabajo para añadir un algoritmo que nos permita explorar de forma más clara qué variables son realmente predictivas del riesgo de derrame cerebral, sin que el esrte desbalanceo de las clases opaque las posibles relaciones.
+
+```{r}
+# Configuración del grid search
+tree_grid <- expand.grid(cp = seq(0, 0.1, by = 0.01))
+
+# Configuración de la validación cruzada
+ctrl <- trainControl(
+  method = "cv",         
+  number = 5,            
+  summaryFunction = twoClassSummary,  
+  classProbs = TRUE,     
+  sampling = "up")
+
+# Entrenamiento del modelo con grid search
+set.seed(123)  
+tree_model <- train(
+  stroke ~ .,
+  data = train_equilibrado,
+  method = "rpart",
+  tuneGrid = tree_grid,
+  trControl = ctrl,
+  metric = "ROC",
+  control = rpart.control(
+    maxdepth = 5,        
+    minsplit = 20,       
+    minbucket = 7        
+  )
+)
+
+# Resultados y visualización
+
+print(tree_model)
+plot(tree_model)
+```
+
+Con un cp de 0.00, obtenemos el mejor valor de ROC, lo que indica una muy buena capacidad del modelo para distinguir entre pacientes con y sin riesgo de derrame cerebral. Este árbol también muestra un buen equilibrio entre sensibilidad y especificidad, lo que significa que es igualmente capaz de identificar correctamente tanto los casos positivos como los negativos.
+
+El algoritmo ha seleccionado automáticamente cp = 0.00 como valor óptimo basándose en el criterio de maximizar el ROC. 
+
+```{r}
+best_tree <- tree_model$finalModel
+rpart.plot(best_tree, extra= 106)
+```
+
+Si analizamos el árbol de decisión vemos que la edad es el factor más determinante estableciéndose como primera división en el árbol con un punto de corte clave en 56 años.
+
+En pacientes menores de 56 años, el BMI es el segundo factor más importante, mostrando un umbral crítico en 39. Este resultado sugiere que la obesidad severa en población relativamente joven aumenta mucho el riesgo de derrame, pasando de una probabilidad del 11% a un 80% cuando se supera este valor.
+
+Para los mayores de 56 años, el árbol identifica otros factores de riesgo relevantes. Entre 56 y 62 años, el tabaquismo ("smoking_status") muestra un impacto notable, mientras que en mayores de 62 años, la presencia de enfermedades cardíacas se convierte en un predictor potente, elevando la probabilidad de derrame hasta el 92% cuando está presente.
+
+Como ya hemos comentado es importante tener en cuenta que estos resultados proceden de un conjunto de datos balanceado manualmente, lo que puede afectar a la estimación de las probabilidades de riesgo. 
+
+
+## AdaBoost
+
+```{r}
+datos_train <- train[!is.na(train$bmi), ]
+datos_train$stroke <- factor(datos_train$stroke, levels = c(0, 1), labels = c("No", "Yes"))
+
+ada_grid <- expand.grid(
+  mfinal = c(50, 100, 150),  
+  maxdepth = c(1, 3, 5),     
+  coeflearn = c("Breiman")
+)
+set.seed(123)
+ada_boost1 <- train(
+  stroke ~ age + bmi + hypertension,
+  data = datos_train,
+  method = "AdaBoost.M1",
+  trControl = trainControl(
+    method = "cv",
+    number = 5,  
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary
+  ),
+  tuneGrid = ada_grid,
+  metric = "ROC"
+)
+ada_boost1
+```
+
+Los resultados muestran que aunque el modelo alcanza buena capacidad predictiva, con valores ROC altos llama la atención que la sensibilidad es perfecta para los casos simples, pero la especificidad es cero.
+
+A medida que los casos se hacen más complejos el área bajo la curva ROC disminuyen, mientras que la especificidad mejora ligeramente, aunque sigue siendo muy baja. 
+
+Estos valores tan extremos seguramente se deban al gran desequilibrio de los datos que hemos comentaado en los árboles de decisión. Vamos a probar a hacer el AdaBoost con datos equilibrados.
+
+```{r}
+ada_grid <- expand.grid(
+  mfinal = c(50, 100, 150),  
+  maxdepth = c(1, 3, 5),     
+  coeflearn = c("Breiman")
+)
+set.seed(123)
+ada_boost2 <- train(
+  stroke ~ age + bmi + hypertension,
+  data = train_equilibrado,
+  method = "AdaBoost.M1",
+  trControl = trainControl(
+    method = "cv",
+    number = 5,  
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary
+  ),
+  tuneGrid = ada_grid,
+  metric = "ROC"
+)
+ada_boost2
+```
+
+Claramente el equilibrio entre clases ha mejorado el comportamiento del modelo, la curva ROC prácticamente mantiene sus valores anteriores. Ahora la sensibilidad es de alrededor de 0.7, esto quiere decir que el modelo detecta correctamente alredor del 70% de los casos de infarto. Y la especifidad aumenta en gran medida identificando alrededor del 80% de los casos con no derrame.
+
+Como hemos comentado en el árbol de decisión, estos resultados no reflejan la realidad y deben interpretarse con cuidado, ya que estamos "engañando" al modelo para que crea que la clase que si que tienen infartos es mucho más común de lo que es en realidad, por lo tanto ni este modelo ni el anterior son realmente útiles en un contexto real sobre estos datos, por esto tampoco tiene sentido comparar estos modelos con el resto que tienen todas las variables y la relación real entre clases de la variable "stroke".
+
+
+## Random Forest
+
+```{r}
+
+library(randomForest)
+library(caret)
+library(pROC)
+library(dplyr)
+
+# Convertir columnas categóricas en factores
+categoricas <- c("gender", "ever_married", "work_type", "Residence_type",
+                 "smoking_status", "hypertension", "heart_disease", "stroke")
+for (col in categoricas) {
+  train[[col]] <- factor(train[[col]])
+  test[[col]] <- factor(test[[col]], levels = levels(train[[col]]))
+}
+
+# Imputación de valores NA con media 
+num_vars <- c("bmi", "avg_glucose_level")
+for (var in num_vars) {
+  train[[var]][is.na(train[[var]])] <- mean(train[[var]], na.rm = TRUE)
+  test[[var]][is.na(test[[var]])] <- mean(train[[var]], na.rm = TRUE)  # usa media de train
+}
+
+
+#validación cruzada
+ctrl_rf <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+train$stroke <- factor(train$stroke, levels = c(0, 1), labels = c("No", "Yes"))
+test$stroke <- factor(test$stroke, levels = c(0, 1), labels = c("No", "Yes"))
+
+# Grid de valores de mtry a probar
+mtry_grid <- expand.grid(mtry = c(2, 3, 4, 5))
+
+#Entrenamiento con validación cruzada
+set.seed(123)
+modelo_rf_cv <- train(
+  stroke ~ ., 
+  data = train,
+  method = "rf",
+  trControl = ctrl_rf,
+  tuneGrid = mtry_grid,
+  metric = "ROC",
+  ntree = 500
+)
+
+# Mostrar el mejor modelo y gráfico
+print(modelo_rf_cv)
+plot(modelo_rf_cv)
+
+
+
+```
+
+```{r}
+# Predecir probabilidades sobre test
+prob_rf_cv <- predict(modelo_rf_cv, newdata = test, type = "prob")[,2]
+
+# Clasificación binaria con umbral
+pred_rf_cv <- ifelse(prob_rf_cv > 0.1, "Yes", "No")
+pred_rf_cv <- factor(pred_rf_cv, levels = c("No", "Yes"))
+test$stroke <- factor(test$stroke, levels = c("No", "Yes"))
+
+# Matriz de confusión
+conf_rf_cv <- confusionMatrix(pred_rf_cv, test$stroke, positive = "Yes")
+print(conf_rf_cv)
+
+# Curva ROC y AUC
+roc_rf_cv <- roc(test$stroke, prob_rf_cv)
+plot(roc_rf_cv, main = "Curva ROC - Random Forest (CV)", col = "darkblue", lwd = 2)
+auc_rf_cv <- auc(roc_rf_cv)
+cat("AUC Random Forest (CV):", round(auc_rf_cv, 3), "\n")
+
+
+```
+
+Para la validación, se ha utilizado un umbral bajo (0.1) con el objetivo de maximizar la detección de casos positivos de stroke, aceptando una menor precisión (más falsos positivos) a cambio de una mayor sensibilidad, lo cual es prioritario en un contexto médico donde es más crítico detectar verdaderos positivos que evitar falsas alarmas.
+
+
+```{r}
+# Aplicar ROSE para balancear
+set.seed(123)
+train_bal <- ROSE(stroke ~ ., data = train, seed = 123)$data
+
+
+
+# Control de validación cruzada
+ctrl_rf <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Grid de mtry
+mtry_grid <- expand.grid(mtry = c(2, 3, 4, 5))
+
+# Entrenamiento del modelo balanceado
+set.seed(123)
+modelo_rf_bal <- train(
+  stroke ~ ., 
+  data = train_bal,
+  method = "rf",
+  trControl = ctrl_rf,
+  tuneGrid = mtry_grid,
+  metric = "ROC",
+  ntree = 500
+)
+
+# Mostrar y graficar
+print(modelo_rf_bal)
+plot(modelo_rf_bal)
+```
+
+A continuación, aplicamos Random Forest sobre datos balanceados para evaluar si esta estrategia mejora la capacidad del modelo para detectar casos positivos sin comprometer tanto la precisión, buscando un mejor equilibrio entre sensibilidad y especificidad.
+```{r}
+# Predicciones
+prob_rf_bal <- predict(modelo_rf_bal, newdata = test, type = "prob")[,2]
+pred_rf_bal <- ifelse(prob_rf_bal > 0.5, "Yes", "No")
+pred_rf_bal <- factor(pred_rf_bal, levels = c("No", "Yes"))
+
+# Matriz de confusión
+conf_rf_bal <- confusionMatrix(pred_rf_bal, test$stroke, positive = "Yes")
+print(conf_rf_bal)
+
+# Curva ROC y AUC
+roc_rf_bal <- roc(test$stroke, prob_rf_bal)
+plot(roc_rf_bal, main = "Curva ROC - Random Forest Balanceado", col = "darkgreen", lwd = 2)
+auc_rf_bal <- auc(roc_rf_bal)
+cat("AUC Random Forest Balanceado (Test):", round(auc_rf_bal, 3), "\n")
+
+```
+
+
+Entrenar Random Forest con datos balanceados mejora la detección de casos reales de stroke (sensibilidad), manteniendo un buen AUC y aceptable especificidad. Aunque la precisión es baja, el modelo es más fiable para identificar pacientes en riesgo, algo esencial en contextos médicos donde la prioridad es no pasar por alto casos positivos.
+
+
+
+```{r}
+
+plot(roc_rf_cv, col = "red", lwd = 2, main = "Curvas ROC - RF vs RF Balanceado (Test)")
+lines(roc_rf_bal, col = "blue", lwd = 2)
+abline(a = 0, b = 1, lty = 2, col = "gray")
+legend("bottomright",
+       legend = c(paste("RF (AUC =", round(auc_rf_cv, 3), ")"),
+                  paste("RF Balanceado (AUC =", round(auc_rf_bal, 3), ")")),
+       col = c("red", "blue"), lwd = 2)
+```
+
+En el gráfico se muestra la comparacion de las Curvas ROC - RF vs RF Balanceado. Ambos modelos (Random Forest original y balanceado) tienen un AUC de 0.796, lo que indica una muy buena capacidad para discriminar entre pacientes con y sin stroke.
+
+Las curvas ROC son prácticamente idénticas, lo que sugiere que el rendimiento global de ambos modelos es similar en términos de clasificación.
+
+Aunque el AUC es igual, el modelo balanceado mejora la sensibilidad (detección de casos positivos), algo muy relevante en contextos médicos. Por tanto, el balanceado es más útil si el objetivo es minimizar los falsos negativos, incluso a costa de aumentar falsos positivos 
+## Naive Bayes
+
+```{r}
+# Control para validación cruzada
+ctrl_nb <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+# Entrenar el modelo Naive Bayes
+set.seed(123)
+modelo_nb_cv <- train(
+  stroke ~ ., 
+  data = train,
+  method = "naive_bayes",
+  trControl = ctrl_nb,
+  metric = "ROC"
+)
+
+# Ver resultados
+print(modelo_nb_cv)
+plot(modelo_nb_cv)
+```
+
+```{r}
+# Predecir probabilidades y clases
+prob_nb_test <- predict(modelo_nb_cv, newdata = test, type = "prob")[, "Yes"]
+pred_nb_test <- ifelse(prob_nb_test > 0.00005, "Yes", "No")
+pred_nb_test <- factor(pred_nb_test, levels = c("No", "Yes"))
+
+# Matriz de confusión
+conf_nb <- confusionMatrix(pred_nb_test, test$stroke, positive = "Yes")
+print(conf_nb)
+
+```
+
+```{r}
+roc_nb <- roc(test$stroke, prob_nb_test)
+plot(roc_nb, main = "Curva ROC - Naive Bayes", col = "purple", lwd = 2)
+auc_nb <- auc(roc_nb)
+cat("AUC Naive Bayes (Test):", round(auc_nb, 3), "\n")
+
+```
+
+## Comparación de modelos
+
+```{r}
+library(pROC)
+
+
+# Graficar todas las curvas
+plot(roc_log_test, col = "blue", lwd = 2, main = "Curvas ROC - Comparación de Modelos", legacy.axes = TRUE)
+lines(roc_rf_cv, col = "green", lwd = 2)
+lines(roc_rf_bal, col = "orange", lwd = 2)
+lines(roc_nb, col = "red", lwd = 2)
+
+abline(a = 0, b = 1, lty = 2, col = "gray")
+
+# Leyenda con AUC
+legend("bottomright",
+       legend = c(
+         paste("Logística (AUC =", round(auc(roc_log_test), 3), ")"),
+         paste("Random Forest (AUC =", round(auc(roc_rf_cv), 3), ")"),
+         paste("RF Balanceado (AUC =", round(auc(roc_rf_bal), 3), ")"),
+         paste("Naive Bayes (AUC =", round(auc(roc_nb), 3), ")")       ),
+       col = c("blue", "green", "orange", "red", "purple"),
+       lwd = 2)
+
+```
+
+```{r}
+comparacion_completa <- data.frame(
+  Modelo = c("Regresión Logística", "Random Forest", "Random Forest Balanceado", "Naive Bayes"),
+  AUC = c(auc_log_test, auc_rf_cv, auc_rf_bal, auc_nb),
+  Accuracy = c(conf_matrix_logistic$overall['Accuracy'], 
+               conf_rf_cv$overall['Accuracy'],
+               conf_rf_bal$overall['Accuracy'],
+               conf_nb$overall['Accuracy']),
+  Sensitivity = c(conf_matrix_logistic$byClass['Sensitivity'],
+                  conf_rf_cv$byClass['Sensitivity'],
+                  conf_rf_bal$byClass['Sensitivity'],
+                  conf_nb$byClass['Sensitivity']),
+  Specificity = c(conf_matrix_logistic$byClass['Specificity'],
+                  conf_rf_cv$byClass['Specificity'],
+                  conf_rf_bal$byClass['Specificity'],
+                  conf_nb$byClass['Specificity']),
+  F1_Score = c(conf_matrix_logistic$byClass['F1'],
+               conf_rf_cv$byClass['F1'],
+               conf_rf_bal$byClass['F1'],
+               conf_nb$byClass['F1'])
+)
+
+print(comparacion_completa)
+```
+
+Hemos comparado los modelos de Regresión Logística, Random Forest, Random Forest Balanceado y Naive Bayes utilizando métricas como el AUC, la Accuracy, la Sensitivity, la Specificity y el F1 Score. Estas métricas permiten evaluar tanto la capacidad general del modelo como su comportamiento frente a clases desbalanceadas.
+
+El modelo de Regresión Logística es el que tiene el mejor rendimiento global, con un AUC de 0.82, el más alto de todos los modelos, lo que indica que tiene una muy buena capacidad para distinguir entre clases positivas y negativas. Su Accuracy es del 86%, también superior a la mayoría de los modelos, con una sensibilidad del 51.1%, que refleja un desempeño aceptable en la detección de casos positivos. Además, tiene una especificidad del 87.7%, lo cual significa que maneja bien los falsos positivos. Finalmente, un F1 Score de 0.25, el más alto entre los modelos comparados, lo que muestra un equilibrio razonable entre precisión y sensibilidad, especialmente útil cuando las clases están desbalanceadas.
+
+El modelo de Random Forest, sin ajustes para el desbalance de clases, tiene un AUC de 0.79 y una precisión del 82%, algo inferiores al modelo anterior pero con una sensibilidad algo mayor, un 53.8%. Sin embargo, su F1 es más bajo, 0.23, lo que sugiere que aunque detecta más casos positivos, lo hace con menor precisión. Por otro lado, el modelo Random Forest Balanceado, ajustado para mejorar la detección de la clase minoritaria, mostró una sensibilidad aún más alta, del 57.7%, pero a costa de una menor precisión global con un 75% y el F1 Score más bajo de todos. Esto indica que, aunque detecta más positivos, lo hace a expensas de un mayor número de falsos positivos.
+
+El modelo de Naive Bayes obtuvo una precisión del 94% y la especificidad más alta, pero su sensibilidad es extremadamente baja, del 7.7%. Esto indica que casi no identifica los casos positivos, lo que lo hace inadecuado en contextos donde es importante no pasar por alto estos casos. Su F1 Score es de apenas 0.12, lo que reesrza esta debilidad.
+
+
+De acuerdo con los resultados obtenidos, el modelo de Regresión Logística creemos que es la opción más adecuada para utilizar en la fase de validación. Presenta el mejor equilibrio entre capacidad predictiva, identificación de casos positivos y control de falsos positivos, lo que lo convierte en la mejor alternativa para problemas donde se requiere un rendimiento robusto y balanceado frente a clases desbalanceadas.
+
+
+## Conclusiones finales y trabajo futuro
+
+```{r}
+val$gender <- factor(val$gender)
+val$ever_married <- factor(val$ever_married)
+val$Residence_type <- factor(val$Residence_type)
+val$smoking_status <- factor(val$smoking_status)
+val$work_type <- factor(val$work_type)
+val$hypertension <- factor(val$hypertension)
+val$heart_disease <- factor(val$heart_disease)
+val$stroke <- factor(val$stroke)
+val <- val[, -which(names(val) == "id")]
+```
+
+## Regresión Logistica para la partición de validación
+
+```{r}
+prob_logistic_val <- predict(modelo_logistico, newdata = val, type = "response")
+
+# Clasificar con el umbral de 0.1
+pred_logistic_val <- ifelse(prob_logistic_val > 0.1, 1, 0)
+
+# Convertir a factor para que coincida con el formato esperado por confusionMatrix
+pred_logistic_val <- factor(pred_logistic_val, levels = c(0, 1))
+val$stroke <- factor(val$stroke, levels = c(0, 1))
+
+# Calcular la matriz de confusión
+conf_matrix_logistic_val <- confusionMatrix(pred_logistic_val, val$stroke, positive = "1")
+print(conf_matrix_logistic_val)
+```
+
+La evaluación del modelo de regresión logística en el conjunto de validación tiene un Accuracy de 88.4%, lo cual podría parecer alto. Sin embargo, debido al esrte desbalance de clases (sólo un 3.77% de los casos son positivos), esta métrica por sí sola no es suficiente para evaluar el desempeño real del modelo.
+
+La sensibilidad obtenida es de 54.1%, lo que indica que el modelo logró identificar correctamente algo más de la mitad de los casos positivos reales (personas con accidente cerebrovascular).
+
+No obstante, la precisión sobre los positivos (Valor Predictivo Positivo) es baja, apenas 17.1%, lo que implica que la mayoría de los casos clasificados como positivos resultaron ser falsos positivos.
+
+Por otro lado, el modelo muestra una especificidad elevada del 89.7%, lo que significa que es bastante eficaz identificando los casos negativos. Esto ayuda a mantener bajo el número total de falsos positivos, a pesar del umbral bajo utilizado.
+
+```{r}
+# Curva ROC en el conjunto de validación
+roc_log_val <- roc(val$stroke, prob_logistic_val)
+plot(roc_log_val, main = "Curva ROC - Regresión Logística (Validación)")
+
+# Calcular AUC en validación
+auc_log_val <- auc(roc_log_val)
+cat("AUC Regresión Logística (Validación):", round(auc_log_val, 3), "\n")
+```
+
+El AUC es de 0.849, lo cual indica una muy buena capacidad del modelo para discriminar entre clases. 
+
+En conjunto, estos resultados muestran que el modelo de regresión logística es capaz de generalizar correctamente sobre nuevos datos y presenta un buen equilibrio entre sensibilidad y especificidad. Su AUC de 0.849 refuerza la idea de que se trata de un modelo confiable para la clasificación binaria, especialmente en contextos donde es crítico identificar correctamente los casos positivos, como en la predicción de accidentes cerebrovasculares. Por tanto, se considera un modelo adecuado para la validación final, alineado con los objetivos del estudio.
+
+
+
+En cuanto a trabajo a futuro sería interesante explorar modelos más avanzados como redes neuronales que podrían capturar patrones más complejos y mejorar el rendimiento predictivo.
+
+También se deberían revisar los datos en sí tratando de añadir las variables antes mencionadas y, como mencionamos en la primera parte, se podría crear un simulador de incendios para poder tener así más datos de incendios simulados con diferentes condiciones y poder superar el mayor inconveniente que nos hemos encontrado, la falta de datos de incendios. Esto podría evitar que tengamos que utilizar modelos más complejos, pudiendo utilizar modelos más simples y facilmente explicables como los implementados en esta práctica, porque un buen modelo depende principalmente de unos buenos datos.
+
+También sería interesante incluir nuevas variables clínicas que puedan estar relacionadas con el riesgo de accidente cerebrovascular y que no se hayan considerado en este estudio. Por otro lado, aunque entendemos que la clase positiva es muy minoritaria, el fuerte desbalance dificulta la aplicación efectiva de los modelos, ya que este desequilibrio puede afectar negativamente el ajuste y la capacidad predictiva del modelo.
